@@ -11,7 +11,7 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.2.0",
+  version: "0.2.1",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
   permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
@@ -29,6 +29,9 @@ const SB7_HOT = SB7 + "/machine/hotBarrageOf24H";
 const SB7_SHIELD = SB7 + "/machine/getShieldWordDict";
 
 const WSPROXY_URL = "wss://wsproxy.douyu.com:6673/";
+// 官方网关接口（POST /lapi/live/gateway/web/<rid>?isH5=1）返回 wss 入口列表（6671~6675 等）
+const GW_API = "https://www.douyu.com/lapi/live/gateway/web/";
+const GW_FALLBACK = [{ domain: "wsproxy.douyu.com", port: 6673 }, { domain: "wsproxy.douyu.com", port: 6674 }, { domain: "wsproxy.douyu.com", port: 6671 }, { domain: "wsproxy.douyu.com", port: 6675 }];
 const VK_SECRET = "r5*^5;}2#${XF[h+;'./.Q'1;,-]f'p[";
 const VER = "20220825";
 const AVER = "218101901";
@@ -183,10 +186,19 @@ function deriveLoginFields(cookieMap) {
 }
 
 // ---------------- 网络 ----------------
-async function netFetch(url) {
-  const res = await ctxref.onethu.net.fetch(url);
+async function netFetch(url, init = {}) {
+  const res = await ctxref.onethu.net.fetch(url, init);
   if (!res.ok) throw new StepError("外部请求", "HTTP " + res.status + " " + url);
   return res;
+}
+// 网关层可达性探针（返回 HTTP 状态/错误 kind，不抛）：101 = 网关正常（WS 升级响应）
+async function probeGateway(domain, port, log) {
+  try {
+    const res = await ctxref.onethu.net.fetch(`https://${domain}:${port}/`, { method: "POST", body: "" });
+    return `HTTP ${res.status}`;
+  } catch (e) {
+    return "不可达：" + String(e.message || e).slice(0, 60);
+  }
 }
 async function sb7Json(url) {
   const data = (await (await netFetch(url)).json());
@@ -255,8 +267,32 @@ async function douyuLogin(roomIdInput, cookieMap, log) {
   const realRid = await resolveRealRoom(roomIdInput);
   log("真实房间号 " + realRid);
 
-  // ① wsproxy
-  const wws = await openWs(WSPROXY_URL, "斗鱼网关", 8000);
+  // ① 网关入口：官方接口拿 wss 列表（失败用缺省 6671~6675），再逐个试连
+  let gws = GW_FALLBACK;
+  try {
+    const g = await (await netFetch(GW_API + realRid + "?isH5=1", { method: "POST", body: "" })).json();
+    if (g && g.error === 0 && Array.isArray(g.data && g.data.wss) && g.data.wss.length) gws = g.data.wss.map((x) => ({ domain: x.domain, port: Number(x.port) }));
+    else log("网关接口结构异常，用缺省入口");
+  } catch (e) {
+    log("网关接口不可用（" + String(e.message || e).slice(0, 40) + "），用缺省入口");
+  }
+  log("候选网关 " + gws.slice(0, 4).map((x) => x.port).join("/"));
+
+  // ①-b 宿主网络层探针：这把枪决定锅在网络还是 webview
+  const probe = await probeGateway(gws[0].domain, gws[0].port, log);
+  log("网络层探针 " + gws[0].domain + ":" + gws[0].port + " → " + probe + "（HTTP 101=通）");
+
+  const wws = await (async () => {
+    let last = null;
+    for (const gw of gws.slice(0, 4)) {
+      try { return await openWs("wss://" + gw.domain + ":" + gw.port + "/", "斗鱼网关", 6000); }
+      catch (e) { last = e; log("网关 " + gw.port + " 连接失败，换下一个"); }
+    }
+    const hint = probe.startsWith("HTTP 101")
+      ? "探针显示网络层可达，但 webview 的 WebSocket 起不来：请完全退出 OneTHU（含 Dock 图标）后重开再试；仍不行就是 WebView 网络被本机代理/防火墙点名拦截"
+      : "网络层也到达不了网关（" + probe + "）：属本机网络/代理问题，先恢复网络或换代理模式";
+    throw new StepError("斗鱼网关", (last && last.message) + "；诊断：" + hint);
+  })();
   let level = null, illegal = null, netErr = null;
   let resolveLogin, resolveProxy;
   const wsLoginres = new Promise((r) => { resolveLogin = r; });

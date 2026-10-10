@@ -11,7 +11,7 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.2.2",
+  version: "0.2.3",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
   permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
@@ -356,9 +356,32 @@ async function sendOnce({ text, roomId, cookieStr, onLog }) {
   }
 }
 
+// ---------------- WebView 网络体检（激活即后台跑，结果只写日志） ----------------
+async function webviewDiag(ctx) {
+  const t0 = Date.now();
+  ctx.log("[niko-diag] origin=" + (location && location.origin) + " ua=" + (navigator && navigator.userAgent));
+  for (const u of ["wss://danmuproxy.douyu.com:8501/", "wss://danmuproxy.douyu.com:8502/", "wss://danmuproxy.douyu.com:8503/", "wss://wsproxy.douyu.com:6673/"]) {
+    const st = await new Promise((resolve) => {
+      let ws;
+      const to = setTimeout(() => resolve("timeout"), 5000);
+      try { ws = new WebSocket(u); } catch (e) { clearTimeout(to); return resolve("throw:" + (e.message || e)); }
+      ws.onopen = () => { clearTimeout(to); resolve("OPEN " + (Date.now() - t0) + "ms"); setTimeout(() => { try { ws.close(); } catch {} }, 80); };
+      ws.onerror = () => { clearTimeout(to); resolve("error " + (Date.now() - t0) + "ms"); };
+    });
+    ctx.log("[niko-diag] WS " + u + " -> " + st);
+  }
+  try {
+    const r = await fetch("https://www.douyu.com/6657", { method: "GET" });
+    ctx.log("[niko-diag] page-fetch douyu.com -> HTTP " + r.status);
+  } catch (e) {
+    ctx.log("[niko-diag] page-fetch douyu.com -> ERR " + String((e && e.message) || e).slice(0, 60));
+  }
+}
+
 // ---------------- 激活 ----------------
 export default function activate(ctx) {
   ctxref = ctx;
+  queueMicrotask(() => webviewDiag(ctx).catch(() => {}));
 
   const load = async () => {
     const s = await ctx.onethu.settings.get();

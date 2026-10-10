@@ -55,10 +55,11 @@
 ## 技术备忘
 
 - 烂梗接口：`api.hguofichp.cn`（sb6657 后端，公开 GET：`getRandOne` / `hotBarrageOf24H` / `getShieldWordDict`）
-- 斗鱼协议：`wss://wsproxy.douyu.com:6673` 登录 → `msgrepeaterproxylist` 拿弹幕服务器 →
-  `wss://danmuproxy.douyu.com:850x` 登录进房 → `chatmessage` 帧发送。
+- 斗鱼协议（v0.2.2 直连版）：**跳过 wsproxy:667x 第一跳**，直接
+  `wss://danmuproxy.douyu.com:8501~8503` 登录进房 → `chatmessage` 帧（从同一条 socket 出）。
+  实测原因：OneTHU 的 WebView 里 wsproxy 登录包会被掐，danmuproxy 直连没事（裸 WKWebView 复现钉死）。
   编解码（12 字节帧头 + STT 转义）与 `vk = md5(rt + secret + dy_did)` 与
-  [ordinaryroad-live-chat-client](https://github.com/zhziyu/ordinaryroad-live-chat-client) 同源，本机实测全链路打通。
+  [ordinaryroad-live-chat-client](https://github.com/zhziyu/ordinaryroad-live-chat-client) 同源。
 - Cookie 只保存在 OneTHU 插件私有设置里，只用于斗鱼登录 WS 握手，不回传任何第三方。
 
 ## 免责声明

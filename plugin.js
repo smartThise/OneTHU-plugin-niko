@@ -11,10 +11,10 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.1.0",
+  version: "0.1.1",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
-  permissions: ["net:external", "ui"],
+  permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
   settings: [
     { key: "cookie", label: "斗鱼 Cookie（须含 dy_did/acf_uid/acf_stk/acf_ltkid）", type: "textarea", default: "", placeholder: "登录 douyu.com 后，DevTools → 网络 → 任意请求头 Cookie 整串复制粘到这里" },
     { key: "roomId", label: "目标房间号", type: "text", default: "6657", placeholder: "6657" },

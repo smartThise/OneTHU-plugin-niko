@@ -11,12 +11,12 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.1.1",
+  version: "0.2.0",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
   permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
   settings: [
-    { key: "cookie", label: "斗鱼 Cookie（须含 dy_did/acf_uid/acf_stk/acf_ltkid）", type: "textarea", default: "", placeholder: "登录 douyu.com 后，DevTools → 网络 → 任意请求头 Cookie 整串复制粘到这里" },
+    { key: "cookie", label: "斗鱼 Cookie（须含 dy_did + acf_jwt_token）", type: "textarea", default: "", placeholder: "登录 douyu.com 后：DevTools → 应用 → Cookie 全选表格复制；或网络面板任意请求的 Cookie 整串。旧版 acf_uid/acf_stk/acf_ltkid 也兼容" },
     { key: "roomId", label: "目标房间号", type: "text", default: "6657", placeholder: "6657" },
     { key: "minInterval", label: "两次发送最小间隔（秒）", type: "text", default: "30", placeholder: "30" },
   ],
@@ -131,14 +131,55 @@ function md5(str) {
 }
 
 // ---------------- Cookie ----------------
+// 兼容两种粘贴格式：
+// ① 传统整串 "a=1; b=2"
+// ② DevTools → Application → Cookies 直接全选表格复制（TSV：name\tvalue\tdomain…）
 function parseCookie(str) {
   const map = {};
-  for (const raw of String(str ?? "").split(/[;\n]/)) {
-    const i = raw.indexOf("=");
-    if (i < 1) continue;
-    map[raw.slice(0, i).trim()] = raw.slice(i + 1).trim();
+  for (const line of String(str ?? "").split(/\r?\n/)) {
+    if (line.includes("\t")) {
+      const cols = line.split("\t");
+      const name = (cols[0] || "").trim();
+      const val = (cols[1] || "").trim();
+      if (name && val) map[name] = val;
+      continue;
+    }
+    for (const raw of line.split(";")) {
+      const i = raw.indexOf("=");
+      if (i < 1) continue;
+      map[raw.slice(0, i).trim()] = raw.slice(i + 1).trim();
+    }
   }
   return map;
+}
+
+// 斗鱼 2026 年已切换 JWT 登录：acf_uid/acf_stk/acf_ltkid 三个 Cookie 不再下发，
+// 全部并入 acf_jwt_token payload（且 biz 值来自 jwt，老代码写死 biz=1 会被网关拒）。
+// 这里统一归一化成 { uid, ltkid, stk, biz }：旧版 Cookie 优先，无则从 JWT 派生。
+function b64url(s) {
+  const t = String(s).replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(t + "=".repeat((4 - (t.length % 4)) % 4));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+function deriveLoginFields(cookieMap) {
+  const legacy = cookieMap.acf_uid && cookieMap.acf_ltkid && cookieMap.acf_stk;
+  if (legacy) {
+    return {
+      uid: String(cookieMap.acf_uid),
+      ltkid: String(cookieMap.acf_ltkid),
+      stk: String(cookieMap.acf_stk),
+      biz: String(cookieMap.acf_biz || "93"),
+      source: "旧版 Cookie",
+    };
+  }
+  const jwtRaw = cookieMap.acf_jwt_token || cookieMap.acf_dmjwt_token;
+  if (!jwtRaw) return null;
+  try {
+    const pl = JSON.parse(b64url(jwtRaw.split(".")[1]));
+    if (!pl.uid || !pl.ltkid || !pl.stk) return null;
+    return { uid: String(pl.uid), ltkid: String(pl.ltkid), stk: String(pl.stk), biz: String(pl.biz ?? 93), source: "JWT 派生" };
+  } catch { return null; }
 }
 
 // ---------------- 网络 ----------------
@@ -206,9 +247,10 @@ function pump(ws, handler) {
 
 // 登录链路：wsproxy(登录态) → proxylist → 弹幕服务器 → loginres/joingroup
 async function douyuLogin(roomIdInput, cookieMap, log) {
-  const need = ["dy_did", "acf_uid", "acf_stk", "acf_ltkid"];
-  const missing = need.filter((k) => !cookieMap[k]);
-  if (missing.length) throw new StepError("Cookie 检查", "缺少字段 " + missing.join("/") + "，请粘贴登录斗鱼后的完整 Cookie");
+  if (!cookieMap.dy_did) throw new StepError("Cookie 检查", "缺少 dy_did（设备指纹），请从登录后的斗鱼页面复制 Cookie");
+  const f = deriveLoginFields(cookieMap);
+  if (!f) throw new StepError("Cookie 检查", "没有可用的登录凭据：需要 acf_jwt_token（现版）或 acf_uid/acf_stk/acf_ltkid（旧版），请重新复制完整 Cookie");
+  log("登录凭据 " + f.source + "（uid=" + f.uid + "）");
 
   const realRid = await resolveRealRoom(roomIdInput);
   log("真实房间号 " + realRid);
@@ -239,11 +281,11 @@ async function douyuLogin(roomIdInput, cookieMap, log) {
     type: "loginreq",
     roomid: String(realRid),
     dfl: "sn@A=105@Sss@A=1",
-    username: cookieMap.acf_uid,
+    username: f.uid,
     password: "",
-    ltkid: cookieMap.acf_ltkid,
-    biz: "1",
-    stk: cookieMap.acf_stk,
+    ltkid: f.ltkid,
+    biz: f.biz,
+    stk: f.stk,
     devid: cookieMap.dy_did,
     ct: "0", pt: "2", cvr: "0", tvr: "7", apd: "",
     rt: String(rt),
@@ -279,8 +321,8 @@ async function douyuLogin(roomIdInput, cookieMap, log) {
     type: "loginreq",
     roomid: String(realRid),
     dfl: "sn@A=105@Sss@A=1",
-    username: cookieMap.acf_uid,
-    uid: cookieMap.acf_uid,
+    username: f.uid,
+    uid: f.uid,
     ver: VER, aver: AVER, ct: "0",
   }));
   const okD = await Promise.race([dLoginP.then(() => true), sleep(9000).then(() => false)]);
@@ -291,17 +333,16 @@ async function douyuLogin(roomIdInput, cookieMap, log) {
   pw.stop(); // 保留 pd 接弹幕回显（调用方管理）
   if (String(illegal) === "1") log("警告：memberinfores 显示 is_illegal=1，发言可能受限");
 
-  return { wws, dws, pd, realRid, level, illegal };
+  return { wws, dws, pd, realRid, level, illegal, fields: f };
 }
 
 // ---------------- 发送（含回显检测） ----------------
 async function sendOnce({ text, roomId, cookieStr, onLog }) {
   const log = (m) => onLog && onLog(m);
   const cookieMap = parseCookie(cookieStr);
-  const uid = cookieMap.acf_uid;
-  const did = cookieMap.dy_did;
-
+  const did = cookieMap.dy_did ?? "";
   const st = await douyuLogin(roomId, cookieMap, log);
+  const uid = st.fields.uid;
   try {
     // 屏蔽词预检（sb6657 收录的斗鱼屏蔽词库）
     let shield = null;
@@ -440,10 +481,12 @@ export default function activate(ctx) {
       closeQuiet(st.dws); closeQuiet(st.wws); st.pd.stop();
       const kvArr = [
         { k: "真实房间号", v: st.realRid },
+        { k: "登录凭据", v: st.fields.source + "（uid=" + st.fields.uid + "）" },
         { k: "wsproxy 登录", v: "✅" },
         { k: "弹幕服务器登录", v: "✅" },
         { k: "斗鱼等级", v: st.level == null ? "未知" : "L" + st.level },
       ];
+      if (Number(st.level) < 10) kvArr.push({ k: "等级提示", v: "6657 有等级墙（常见要求 ≥L10），当前等级可能发不出去——发射后以回显结果为准" });
       if (String(st.illegal) === "1") kvArr.push({ k: "账号状态", v: "⛔ is_illegal=1，发言被限制" });
       kvArr.push({ k: "结论", v: "链路完整，随时可发；能否上墙取决于等级墙/风控" });
       return { text: "🩺 全链路自检通过（未发送任何弹幕）", kv: kvArr };
@@ -468,4 +511,4 @@ export default function activate(ctx) {
 }
 
 // 内部测试钩子（不影响发布形态）
-export const _internals = { md5, frame, decodeFrame, kv, parseCookie, esc, unesc };
+export const _internals = { md5, frame, decodeFrame, kv, parseCookie, esc, unesc, deriveLoginFields, b64url };

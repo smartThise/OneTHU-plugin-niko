@@ -11,7 +11,7 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.5.0",
+  version: "0.5.1",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
   permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
@@ -630,7 +630,7 @@ export default function activate(ctx) {
   };
 
   // ① 随机烂梗一键发送（input 可直接给内容）
-  ctx.registerCommand({ id: "send", title: "🎲 随机烂梗一键发送", inputLabel: "（可选）直接填弹幕内容", inputPlaceholder: "留空 = 随机捞一条" }, async (input) => {
+  ctx.registerCommand({ id: "send", title: "发送 niko 烂梗到斗鱼直播间（随机/自定义）", inputLabel: "（可选）直接填弹幕内容", inputPlaceholder: "留空 = 随机捞一条" }, async (input) => {
     const s = await load();
     await precheck(s);
     const text = (String(input ?? "").trim()) || (await fetchRandByTag(await parseTag(s.defaultTag))).text;
@@ -650,7 +650,7 @@ export default function activate(ctx) {
   });
 
   // ② 24h 热门榜单（只读）
-  ctx.registerCommand({ id: "hot", title: "🔥 24h 热门烂梗榜" }, async () => {
+  ctx.registerCommand({ id: "hot", title: "看 niko 烂梗 24h 热门榜（玩机器房间）" }, async () => {
     const hot = await fetchHotMemes();
     return {
       text: "共 " + hot.length + " 条玩机器房 24h 热门烂梗（次数≠你发得出去）",
@@ -659,7 +659,7 @@ export default function activate(ctx) {
   });
 
   // ③ 从热门里挑一条发
-  ctx.registerCommand({ id: "send_hot", title: "🔥 热门烂梗挑一条发" }, async () => {
+  ctx.registerCommand({ id: "send_hot", title: "从 niko 烂梗热门里挑一条发到斗鱼" }, async () => {
     const s = await load();
     await precheck(s);
     const hot = await fetchHotMemes();
@@ -715,7 +715,7 @@ export default function activate(ctx) {
   // ⑤ OH 接线入口（文档 §9.4）：OH 里说「用 niko 插件…」即可命中本命令。
   //    input 语法：空=全站随机；「niko/donk/ququ/s1/zywoo/jingjie/07」=按标签随机；
   //    「hot [标签]」=热门挑一条；其余文本=按原文发送。
-  ctx.registerCommand({ id: "oh", title: "🎲 发烂梗（OH 入口）", inputLabel: "niko｜hot｜直接填弹幕", inputPlaceholder: "例：niko 或 hot 或 看你皮肤对不对味（留空=全站随机）" }, async (input) => {
+  ctx.registerCommand({ id: "oh", title: "帮我发送 niko 烂梗（发到斗鱼 6657；也可说 donk/ququ/s1/zywoo/frozen 或 hot；留空=按默认标签随机）", inputLabel: "niko｜hot｜标签名｜直接填弹幕", inputPlaceholder: "例：niko 或 hot 或 看你皮肤对不对味（留空=全站随机）" }, async (input) => {
     const s = await load();
     await precheck(s);
     const raw = String(input ?? "").trim();

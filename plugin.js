@@ -11,7 +11,7 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.4.0",
+  version: "0.5.0",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
   permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
@@ -19,6 +19,18 @@ export const manifest = {
     { key: "cookie", label: "斗鱼 Cookie（须含 dy_did + acf_jwt_token）", type: "textarea", default: "", placeholder: "登录 douyu.com 后：DevTools → 应用 → Cookie 全选表格复制；或网络面板任意请求的 Cookie 整串。旧版 acf_uid/acf_stk/acf_ltkid 也兼容" },
     { key: "roomId", label: "目标房间号", type: "text", default: "6657", placeholder: "6657" },
     { key: "minInterval", label: "两次发送最小间隔（秒）", type: "text", default: "30", placeholder: "30" },
+    { key: "defaultTag", label: "随机烂梗默认标签", type: "select", default: "all",
+      options: [
+        { value: "all", label: "全站随机" },
+        { value: "07", label: "NiKo（本插件核心客户）" },
+        { value: "00", label: "喷玩机器" },
+        { value: "01", label: "喷选手" },
+        { value: "03", label: "QUQU" },
+        { value: "10", label: "Donk" },
+        { value: "12", label: "Zywoo" },
+        { value: "21", label: "S1mple" },
+        { value: "06", label: "群魔乱舞" },
+      ] },
   ],
 };
 
@@ -196,8 +208,19 @@ async function fetchRandMeme() {
   const d = await sb7Json(SB7_RAND);
   return { text: d.barrage, id: d.id, cnt: d.cnt };
 }
-async function fetchHotMemes() {
-  return ((await sb7Json(SB7_HOT)) || []).map((x) => ({ text: x.barrage, id: x.barrageId, cnt: x.cnt }));
+async function fetchHotMemes(tagVal) {
+  if (!tagVal) return ((await sb7Json(SB7_HOT)) || []).map((x) => ({ text: x.barrage, id: x.barrageId, cnt: x.cnt }));
+  const merged = [];
+  for (let page = 1; page <= 2; page++) {
+    try {
+      const d = await sb7Json(SB7 + "/machine/Page?tags=" + encodeURIComponent(tagVal) + "&page=" + page + "&pageSize=30");
+      for (const item of ((d && d.list) || [])) {
+        merged.push({ text: item.barrage, id: item.id, cnt: item.cnt, tags: item.tags });
+      }
+    } catch { break; }
+  }
+  merged.sort((a, b) => Number(b.cnt || 0) - Number(a.cnt || 0));
+  return merged;
 }
 async function fetchShieldWords() {
   try { return (await sb7Json(SB7_SHIELD)) || []; } catch { return []; } // 预检失败不阻断
@@ -311,6 +334,54 @@ async function douyuLogin(roomIdInput, cookieMap, log) {
 
   return { dws, pd, realRid, level, illegal, fields: f };
 }
+
+// ---------------- 标签体系（sb6657 dictList；NiKo=07） ----------------
+const SB7_TAGS = SB7 + "/machine/dictList";
+const TAG_FALLBACK = [
+  ["00", "喷玩机器"], ["01", "喷选手"], ["02", "加一"], ["03", "QUQU"],
+  ["05", "木柜子"], ["06", "群魔乱舞"], ["07", "NiKo"], ["08", "ropz"],
+  ["09", "直播间互喷"], ["10", "Donk"], ["11", "伟伟"], ["12", "Zywoo"],
+  ["13", "m0NESY"], ["15", "device"], ["16", "Twistzz"], ["17", "DOTA"],
+  ["18", "千早爱音"], ["19", "三角初华"], ["20", "Falcons"], ["21", "S1mple"],
+  ["22", "赛事梗"], ["23", "京介"], ["24", "HLTV"], ["25", "Team Spirit"],
+  ["26", "chopper"], ["27", "🗿🗿🗿"], ["28", "足小子"], ["29", "frozen"],
+  ["30", "测谎仪"],
+];
+let _tagDict = null;
+async function tagDict() {
+  if (_tagDict) return _tagDict;
+  try {
+    const d = await sb7Json(SB7_TAGS);
+    if (Array.isArray(d) && d.length) _tagDict = d.map((x) => [String(x.dictValue), String(x.dictLabel)]);
+    else _tagDict = TAG_FALLBACK;
+  } catch { _tagDict = TAG_FALLBACK; }
+  return _tagDict;
+}
+async function parseTag(input) {
+  // 输入可以是标签 ID（07）或名称（NiKo / niko / 什么花都行，大小写不敏感做包含匹配）
+  const dict = await tagDict();
+  const key = String(input ?? "").trim();
+  if (!key || key === "all" || key === "全站") return null; // 全站
+  if (/^\d{2}$/.test(key)) return key;
+  const lower = key.toLowerCase();
+  const hit = dict.find(([, label]) => label.toLowerCase().includes(lower) || lower.includes(label.toLowerCase()));
+  return hit ? hit[0] : null;
+}
+async function fetchRandByTag(tagVal) {
+  // getRandOne 不带标签参数，故用 Page?tags= 随机翻页抽
+  if (!tagVal) return fetchRandMeme();
+  for (let page = 1; page <= 3; page++) {
+    try {
+      const p = Math.ceil(Math.random() * (4 - page)); // 1..3
+      const d = await sb7Json(SB7 + "/machine/Page?tags=" + encodeURIComponent(tagVal) + "&page=" + p + "&pageSize=30");
+      const list = (d && d.list) || [];
+      if (!list.length) continue;
+      return { text: list[Math.floor(Math.random() * list.length)].barrage, id: "", cnt: "" };
+    } catch { /* 换页重试 */ }
+  }
+  return fetchRandMeme(); // 兜底
+}
+// OH 输入路由：niko/donk/ququ/s1/zywoo/ropz/frozen/……
 
 // ---------------- 发送（含回显检测） ----------------
 
@@ -532,6 +603,7 @@ export default function activate(ctx) {
       cookie: String(s.cookie || "").trim(),
       roomId: String(s.roomId || "").trim() || "6657",
       minInterval: Math.max(0, Number(s.minInterval) || 30),
+      defaultTag: String(s.defaultTag || "all"),
     };
   };
 
@@ -561,7 +633,7 @@ export default function activate(ctx) {
   ctx.registerCommand({ id: "send", title: "🎲 随机烂梗一键发送", inputLabel: "（可选）直接填弹幕内容", inputPlaceholder: "留空 = 随机捞一条" }, async (input) => {
     const s = await load();
     await precheck(s);
-    const text = (String(input ?? "").trim()) || (await fetchRandMeme()).text;
+    const text = (String(input ?? "").trim()) || (await fetchRandByTag(await parseTag(s.defaultTag))).text;
     const ok = await ctx.onethu.ui.confirm(
       "目标房间 " + s.roomId + "，内容：\n" + text + "\n\n确认发射？（发出即公开弹幕，人人可见）",
       { title: "一键发送 niko 烂梗", confirmText: "发射" },
@@ -640,7 +712,45 @@ export default function activate(ctx) {
     }
   });
 
-  // ⑤ 保底：只捞梗复制，不碰斗鱼
+  // ⑤ OH 接线入口（文档 §9.4）：OH 里说「用 niko 插件…」即可命中本命令。
+  //    input 语法：空=全站随机；「niko/donk/ququ/s1/zywoo/jingjie/07」=按标签随机；
+  //    「hot [标签]」=热门挑一条；其余文本=按原文发送。
+  ctx.registerCommand({ id: "oh", title: "🎲 发烂梗（OH 入口）", inputLabel: "niko｜hot｜直接填弹幕", inputPlaceholder: "例：niko 或 hot 或 看你皮肤对不对味（留空=全站随机）" }, async (input) => {
+    const s = await load();
+    await precheck(s);
+    const raw = String(input ?? "").trim();
+    const lower = raw.toLowerCase();
+    let hotTag = null, hotMode = false;
+    if (lower === "hot" || lower.startsWith("hot ")) {
+      hotMode = true;
+      const rest = raw.slice(3).trim();
+      if (rest) { const t = await parseTag(rest); if (!t && rest) return "❌ 认不出标签 " + rest + "（可用 NiKo/Donk/QUQU/players… 或两位 ID）"; hotTag = t; }
+    }
+    let text;
+    if (hotMode) { const list = await fetchHotMemes(hotTag); if (!list.length) return "❌ 该标签暂无热门"; text = list[0].text; }
+    else if (raw) {
+      const t = await parseTag(raw);
+      if (t) text = (await fetchRandByTag(t)).text;
+      else text = raw;
+    } else {
+      text = (await fetchRandByTag(await parseTag(s.defaultTag))).text;
+    }
+    const ok = await ctx.onethu.ui.confirm(
+      "目标房间 " + s.roomId + "，内容：\n" + text + "\n\n确认发射？（发出即公开弹幕）",
+      { title: "一键发送 niko 烂梗", confirmText: "发射" },
+    );
+    if (!ok) return "已取消";
+    cooldownCheck(s);
+    const logs = [];
+    try {
+      const res = await sendOnce({ text, roomId: s.roomId, cookieStr: s.cookie, onLog: mkLogger(logs) });
+      return fmtSend(text, res, logs);
+    } catch (e) {
+      return { text: "❌ " + (e.step ? e.message : "发送失败：" + e.message), markdown: logs.map((l) => "- " + l).join("\n") };
+    }
+  });
+
+  // ⑥ 保底：只捞梗复制，不碰斗鱼
   ctx.registerCommand({ id: "copy", title: "📋 随机捞梗（复制）" }, async () => {
     const m = await fetchRandMeme();
     await ctx.onethu.ui.clipboard.write(m.text);

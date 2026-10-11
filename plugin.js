@@ -11,7 +11,7 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.5.1",
+  version: "0.5.2",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
   permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
@@ -623,9 +623,10 @@ export default function activate(ctx) {
       { k: "斗鱼等级", v: res && res.level != null ? "L" + res.level : "未知" },
     ];
     if (res && res.shield) kvArr.push({ k: "含屏蔽词", v: "「" + res.shield + "」（sb6657 收录，可能被吞）" });
+    const sawText = res && res.saw && res.saw.length ? "\n- 发送后 10s 收到的帧类型：" + res.saw.join(" → ") : "";
     const head = res && res.echoed
       ? "✅ 已上墙（收到本账号弹幕回显，板上钉钉）"
-      : "⚠️ 已发出，但 10 秒内未见本账号回显：大概率被等级墙/风控静默拦截。本房间需要斗鱼等级门槛，低等级号常被吞。";
+      : "⚠️ 已发出，但 10 秒内未见本账号回显：大概率被等级墙/风控静默拦截。本房间需要斗鱼等级门槛，低等级号常被吞。" + sawText;
     return { text: head, kv: kvArr, markdown: logs && logs.length ? logs.map((l) => "- " + l).join("\n") : undefined };
   };
 

@@ -11,7 +11,7 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.3.0",
+  version: "0.4.0",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
   permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
@@ -335,16 +335,118 @@ async function tryHostBridge(cookieStr, roomId, text, checkOnly) {
   return { echoed: !!out.echoed, roomUrl: "https://www.douyu.com/" + out.realRid, level: out.level ?? null, shield: null, via: out.via || "宿主桥" };
 }
 
+// ---------------- 通用 WS 桥链（ctx.onethu.ws，v0.4.0 主路径） ----------------
+function b64FromU8(u8) {
+  let bin = "";
+  for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+  return btoa(bin);
+}
+function u8FromB64(b) {
+  const bin = atob(b);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+function loginReqObj(f, realRid, cookieMap, rt) {
+  return {
+    type: "loginreq",
+    roomid: String(realRid),
+    dfl: "sn@A=105@Sss@A=1",
+    username: f.uid,
+    password: "",
+    ltkid: f.ltkid,
+    biz: f.biz,
+    stk: f.stk,
+    devid: cookieMap.dy_did,
+    ct: "0", pt: "2", cvr: "0", tvr: "7", apd: "",
+    rt: String(rt),
+    vk: md5(rt + VK_SECRET + cookieMap.dy_did),
+    ver: VER, aver: AVER, dmbt: "chrome", dmbv: "116",
+  };
+}
+async function facadeWsSend({ text, roomId, cookieStr, onLog }) {
+  const log = (m) => onLog && onLog(m);
+  if (!ctxref.onethu.ws || typeof ctxref.onethu.ws.open !== "function") {
+    const e = new Error("facade 无 ws 命名空间"); e.code = "NO_FACADE_WS"; throw e;
+  }
+  const cookieMap = parseCookie(cookieStr);
+  const f = deriveLoginFields(cookieMap);
+  if (!f) throw new StepError("Cookie 检查", "没有可用的登录凭据（acf_jwt_token 或旧版四字段）");
+  const realRid = await resolveRealRoom(roomId);
+  log("真实房间号 " + realRid + "（通用 WS 桥·宿主直连）");
+  const sess = await ctxref.onethu.ws.open("wss://danmuproxy.douyu.com:8501/", { connectTimeoutMs: 6000 });
+  let level = null;
+  try {
+    const rt = Math.floor(Date.now() / 1000);
+    await ctxref.onethu.ws.send(sess, b64FromU8(frame(loginReqObj(f, realRid, cookieMap, rt))), "b64");
+    // 等 loginres
+    const deadline = Date.now() + 9000;
+    let logged = false;
+    while (Date.now() < deadline && !logged) {
+      const fr = await ctxref.onethu.ws.recv(sess, 900).catch(() => null);
+      if (!fr) continue;
+      if (fr.kind === "closed") throw new StepError("斗鱼连接", "登录阶段连接被远端关闭");
+      const stts = fr.kind === "text" ? [fr.text] : decodeFrame(u8FromB64(fr.b64));
+      for (const stt of stts) {
+        const m = kv(stt);
+        if (m.type === "loginres") logged = true;
+        else if (m.type === "memberinfores") { level = m.level ?? null; }
+      }
+    }
+    if (!logged) throw new StepError("弹幕服务器登录", "9 秒未收到 loginres（" + f.source + "）");
+    await ctxref.onethu.ws.send(sess, b64FromU8(frame({ type: "joingroup", rid: String(realRid), gid: "1" })), "b64");
+    await sleep(300);
+    await ctxref.onethu.ws.send(sess, b64FromU8(frame({ type: "mrkl" })), "b64");
+    await sleep(200);
+    await ctxref.onethu.ws.send(sess, b64FromU8(frame({ type: "sub", mt: "dayrk" })), "b64");
+    const tts = Math.floor(Date.now() / 1000);
+    await ctxref.onethu.ws.send(sess, b64FromU8(frame({
+      type: "chatmessage", pe: "0", content: String(text).trim(), col: "0",
+      dy: cookieMap.dy_did, sender: f.uid,
+      ifs: "0", nc: "0", dat: "0", rev: "0",
+      tts: String(tts), admzq: "0", cst: String(tts * 1000 + 9000),
+    })), "b64");
+    // 回显监听 10s
+    let echoed = false;
+    const deadline2 = Date.now() + 10000;
+    while (Date.now() < deadline2 && !echoed) {
+      const fr = await ctxref.onethu.ws.recv(sess, 500).catch(() => null);
+      if (!fr) continue;
+      if (fr.kind === "closed") break;
+      const stts = fr.kind === "text" ? [fr.text] : decodeFrame(u8FromB64(fr.b64));
+      for (const stt of stts) {
+        const m = kv(stt);
+        if (m.type === "chatmsg" && String(m.uid) === String(f.uid)) {
+          const got = String(m.txt || "").trim();
+          if (got === text.trim() || (text && got.includes(text.slice(0, Math.min(8, text.length))))) { echoed = true; break; }
+        }
+      }
+    }
+    lastSendAt = Date.now();
+    return { echoed, roomUrl: "https://www.douyu.com/" + realRid, level, shield: null, via: "通用 WS 桥（宿主）" };
+  } finally {
+    try { await ctxref.onethu.ws.close(sess); } catch { /* 已关，忽略 */ }
+  }
+}
+
 async function sendOnce({ text, roomId, cookieStr, onLog }) {
   const log = (m) => onLog && onLog(m);
-  // ① 宿主桥优先（可用即一步到位）
+  // ① 通用 WS 桥（新宿主 ✅）
+  try {
+    const via = await facadeWsSend({ text, roomId, cookieStr, onLog });
+    return via;
+  } catch (e) {
+    if ((e && e.code) !== "NO_FACADE_WS") log("通用 WS 桥失败（" + String((e && e.message) || e).slice(0, 70) + "），降级下一通道");
+  }
+  // ② 宿主专用命令（0.2.x 桥已编译的宿主）
   try {
     const via = await tryHostBridge(cookieStr, roomId, text, false);
-    if (via) { log("已走宿主桥：" + via.via); return via; }
-    log("宿主桥不可用（未编译进当前 OneTHU），回落 WebView 通道");
+    if (via) { log("已走专用宿主桥：" + via.via); return via; }
   } catch (e) {
-    log("宿主桥调用失败，回落 WebView 通道（" + String((e && e.message) || e).slice(0, 80) + "）");
+    log("专用宿主桥失败：回落 WebView 通道（" + String((e && e.message) || e).slice(0, 70) + "）");
   }
+  // ③ WebView 通道
+  log("宿主桥不可用（未编译进当前 OneTHU），回落 WebView 通道");
   // ② 老 WebView 通道
   const cookieMap = parseCookie(cookieStr);
   const did = cookieMap.dy_did ?? "";
@@ -515,8 +617,8 @@ export default function activate(ctx) {
     const log = mkLogger(logs);
     try {
       await precheck(s);
-      try { await tauriInvoke("douyu_self_check", { args: { cookie: s.cookie, roomId: Number(s.roomId), content: "", checkOnly: true } }); }
-      catch { /* 桥没装，走老链路 */ }
+      try { await facadeWsSend({ text: "", roomId: s.roomId, cookieStr: s.cookie, onLog: log, checkOnly: true }); await Promise.resolve(); }
+      catch (e) { if ((e && e.code) !== "NO_FACADE_WS") throw e; }
       const cookieMap = parseCookie(s.cookie);
       const st = await douyuLogin(s.roomId, cookieMap, log);
       closeQuiet(st.dws); st.pd.stop();

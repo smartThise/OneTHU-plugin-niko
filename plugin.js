@@ -11,7 +11,7 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.2.4",
+  version: "0.3.0",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
   permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
@@ -313,8 +313,38 @@ async function douyuLogin(roomIdInput, cookieMap, log) {
 }
 
 // ---------------- 发送（含回显检测） ----------------
+
+// ---------------- 宿主桥（OneTHU 主仓加了 douyu_send_danmu 后自动生效，失败回落老路径） ----------------
+function tauriInvoke(cmd, args) {
+  const ti = typeof window !== "undefined" && (window.__TAURI_INTERNALS__ || (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__));
+  if (!ti || typeof ti.invoke !== "function") throw new Error("__TAURI_INTERNALS__ 不在本页面（桥未编译进宿主）");
+  return ti.invoke(cmd, args);
+}
+
+async function tryHostBridge(cookieStr, roomId, text, checkOnly) {
+  let out;
+  try {
+    out = await tauriInvoke("douyu_send_danmu", { args: { cookie: cookieStr, roomId: Number(roomId), content: text, checkOnly } });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/douyu_send_danmu|not.*found|未获授权/.test(msg)) return null; // 桥没装 → 回落
+    throw new StepError("宿主桥", msg.slice(0, 160));
+  }
+  lastSendAt = Date.now();
+  return { echoed: !!out.echoed, roomUrl: "https://www.douyu.com/" + out.realRid, level: out.level ?? null, shield: null, via: out.via || "宿主桥" };
+}
+
 async function sendOnce({ text, roomId, cookieStr, onLog }) {
   const log = (m) => onLog && onLog(m);
+  // ① 宿主桥优先（可用即一步到位）
+  try {
+    const via = await tryHostBridge(cookieStr, roomId, text, false);
+    if (via) { log("已走宿主桥：" + via.via); return via; }
+    log("宿主桥不可用（未编译进当前 OneTHU），回落 WebView 通道");
+  } catch (e) {
+    log("宿主桥调用失败，回落 WebView 通道（" + String((e && e.message) || e).slice(0, 80) + "）");
+  }
+  // ② 老 WebView 通道
   const cookieMap = parseCookie(cookieStr);
   const did = cookieMap.dy_did ?? "";
   const st = await douyuLogin(roomId, cookieMap, log);
@@ -484,6 +514,8 @@ export default function activate(ctx) {
     const log = mkLogger(logs);
     try {
       await precheck(s);
+      try { await tauriInvoke("douyu_self_check", { args: { cookie: s.cookie, roomId: Number(s.roomId), content: "", checkOnly: true } }); }
+      catch { /* 桥没装，走老链路 */ }
       const cookieMap = parseCookie(s.cookie);
       const st = await douyuLogin(s.roomId, cookieMap, log);
       closeQuiet(st.dws); st.pd.stop();

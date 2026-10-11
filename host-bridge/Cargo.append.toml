@@ -1,0 +1,7 @@
+# ===== niko 弹幕桥：追加到 apps/desktop/src-tauri/Cargo.toml 的 [dependencies] =====
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+md-5 = "0.10"
+futures-util = "0.3"
+# serde/serde_json/base64 已在 tauri 依赖树里；若编译报 serde derive 缺失，再显式加：
+# serde = { version = "1", features = ["derive"] }
+# 可选（README 改动四）：把 reqwest 的 "rustls-tls" 换成 "native-tls"，与 curl/浏览器同指纹

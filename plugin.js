@@ -316,8 +316,8 @@ async function douyuLogin(roomIdInput, cookieMap, log) {
 
 // ---------------- 宿主桥（OneTHU 主仓加了 douyu_send_danmu 后自动生效，失败回落老路径） ----------------
 function tauriInvoke(cmd, args) {
-  const ti = typeof window !== "undefined" && (window.__TAURI_INTERNALS__ || (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__));
-  if (!ti || typeof ti.invoke !== "function") throw new Error("__TAURI_INTERNALS__ 不在本页面（桥未编译进宿主）");
+  const ti = typeof window !== "undefined" && (window.__TAURI_INTERNALS__ || (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__) || null);
+  if (!ti || typeof ti.invoke !== "function") return Promise.reject({ code: "NO_BRIDGE" });
   return ti.invoke(cmd, args);
 }
 
@@ -326,8 +326,9 @@ async function tryHostBridge(cookieStr, roomId, text, checkOnly) {
   try {
     out = await tauriInvoke("douyu_send_danmu", { args: { cookie: cookieStr, roomId: Number(roomId), content: text, checkOnly } });
   } catch (e) {
+    const code = e && e.code;
     const msg = String((e && e.message) || e);
-    if (/douyu_send_danmu|not.*found|未获授权/.test(msg)) return null; // 桥没装 → 回落
+    if (code === "NO_BRIDGE" || /douyu_send_danmu|not.*found|未获授权/.test(msg)) return null; // 桥没装 → 静默回落
     throw new StepError("宿主桥", msg.slice(0, 160));
   }
   lastSendAt = Date.now();

@@ -1,4 +1,5 @@
-# ---- niko 弹幕桥（宿主 WS 桥；WebView 内 WebSocket 在 macOS 26.5 全灭，短事务移宿主） ----
+# ---- niko 弹幕桥：仅桌面（macOS/Windows）；Android 走 WebView 内 WS（Chromium 系无此 bug） ----
+[target.'cfg(not(target_os = "android"))'.dependencies]
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 md-5 = "0.10"
 futures-util = "0.3"

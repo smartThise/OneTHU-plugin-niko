@@ -11,7 +11,7 @@ export const manifest = {
   id: "onethu.niko",
   kind: "js",
   name: "一键发送 niko 烂梗",
-  version: "0.2.3",
+  version: "0.2.4",
   author: "smartThis",
   description: "从 sb6657.cn（玩机器烂梗收集）随手捞一条烂梗，用你的斗鱼登录态经弹幕协议发进直播间（默认玩机器 6657，有等级墙）。纯搞笑，慎发。",
   permissions: ["net:external", "ui", "storage"], // storage：宿主把 settings.get() 划在 storage 权限下，读设置必需
@@ -360,22 +360,32 @@ async function sendOnce({ text, roomId, cookieStr, onLog }) {
 async function webviewDiag(ctx) {
   const t0 = Date.now();
   ctx.log("[niko-diag] origin=" + (location && location.origin) + " ua=" + (navigator && navigator.userAgent));
-  for (const u of ["wss://danmuproxy.douyu.com:8501/", "wss://danmuproxy.douyu.com:8502/", "wss://danmuproxy.douyu.com:8503/", "wss://wsproxy.douyu.com:6673/"]) {
+  for (const u of ["wss://danmuproxy.douyu.com:8501/", "wss://wsproxy.douyu.com:6673/", "wss://www.baidu.com:443/"]) {
     const st = await new Promise((resolve) => {
       let ws;
       const to = setTimeout(() => resolve("timeout"), 5000);
       try { ws = new WebSocket(u); } catch (e) { clearTimeout(to); return resolve("throw:" + (e.message || e)); }
-      ws.onopen = () => { clearTimeout(to); resolve("OPEN " + (Date.now() - t0) + "ms"); setTimeout(() => { try { ws.close(); } catch {} }, 80); };
+      ws.onopen = () => { clearTimeout(to); resolve("OPEN " + (Date.now() - t0) + "ms(ref=" + u.slice(6, 26) + ")"); setTimeout(() => { try { ws.close(); } catch {} }, 80); };
       ws.onerror = () => { clearTimeout(to); resolve("error " + (Date.now() - t0) + "ms"); };
     });
     ctx.log("[niko-diag] WS " + u + " -> " + st);
   }
+  // 区分「CORS 误报」与「真·网络不通」：no-cors 会把 opaque 响应当成功
   try {
-    const r = await fetch("https://www.douyu.com/6657", { method: "GET" });
-    ctx.log("[niko-diag] page-fetch douyu.com -> HTTP " + r.status);
-  } catch (e) {
-    ctx.log("[niko-diag] page-fetch douyu.com -> ERR " + String((e && e.message) || e).slice(0, 60));
+    const t1 = Date.now();
+    const r = await fetch("https://www.douyu.com/6657", { method: "GET", mode: "no-cors" });
+    ctx.log("[niko-diag] page-fetch(no-cors) douyu.com -> type=" + r.type + " (opaque=网络层实际通了，之前 Load failed 只是 CORS)")
+      ; } catch (e) {
+    ctx.log("[niko-diag] page-fetch(no-cors) douyu.com -> ERR " + String((e && e.message) || e).slice(0, 70));
   }
+  // 图片加载（WebKit 网络层第三种形态）
+  await new Promise((resolve) => {
+    const img = new Image();
+    const to = setTimeout(() => { ctx.log("[niko-diag] img douyu favicon -> timeout"); resolve(); }, 5000);
+    img.onload = () => { clearTimeout(to); ctx.log("[niko-diag] img douyu favicon -> LOADED " + (Date.now() - t0) + "ms"); resolve(); };
+    img.onerror = () => { clearTimeout(to); ctx.log("[niko-diag] img douyu favicon -> error (可为混入 https 混合内容问题)"); resolve(); };
+    img.src = "https://apic.douyucdn.cn/upload/avatar_v3/201905/badbf01f7ab943358bf78bcd9245305f_big.jpg" + "?" + Math.random();
+  });
 }
 
 // ---------------- 激活 ----------------
